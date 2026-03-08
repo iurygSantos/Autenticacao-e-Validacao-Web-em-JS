@@ -1,240 +1,207 @@
-// Importa o framework Express para criar o servidor
-const express = require("express");
 
-// Importa o módulo de leitura de arquivos do Node
+// IMPORTA BIBLIOTECAS
+const express = require("express");
+const auth = require("basic-auth");
 const fs = require("fs");
 
-// Cria a aplicação Express
 const app = express();
-
-// Define a porta do servidor
-const PORT = 3000;
-
-// Permite receber JSON nas requisições
 app.use(express.json());
 
-
-// Estrutura que guarda tokens em memória
-const tokens = {};
-
-function SalvarTokenNoArquivo(id, token) {
-
-    const tempoAtual = Date.now();
-
-    // Lê todo o arquivo login.txt
-    const dados = fs.readFileSync("login.txt", "utf8");
-
-    // Divide o arquivo em linhas
-    const linhas = dados.split("\n");
-
-    // Nova estrutura que será salva depois
-    const novasLinhas = [];
-
-    // Percorre todas as linhas do arquivo
-    for (let linha of linhas) 
-    {
-
-        // Ignora linha vazia
-        if (linha.trim() === "") 
-        {
-            novasLinhas.push(linha);
-            continue;
-        }
-
-        // Separa campos por vírgula
-        const partes = linha.split(",");
-
-        const idArquivo = partes[0].trim();
-
-        // Se for o usuário que estamos atualizando
-        if (idArquivo === id) 
-        {
-            const login = partes[1];
-            const senha = partes[2];
-
-            // recria linha adicionando token
-            novasLinhas.push(`${idArquivo},${login},${senha},${token}`);
-
-            // // salva token + timestamp
-            // novasLinhas.push(`${idArquivo},${login},${senha},${token},${tempoAtual}`);
-            
-        } else {
-
-            // mantém linha original
-            novasLinhas.push(linha);
-        }
-    }
-
-    // Reescreve o arquivo com as alterações
-    fs.writeFileSync("login.txt", novasLinhas.join("\n"));
-
-}
+const PORT = 3000;
 
 // ===============================
-// Função que valida TOKEN
+// BASIC AUTH (segurança mínima)
 // ===============================
-function ValidarToken(id, token) 
+const BASIC_USER = "admin";
+const BASIC_PASS = "1234";
+
+function basicAuthMiddleware(req, res, next)
 {
-    //verifica se existe token armazenado
-    if (!tokens[id]) 
-    {        
-        return false;
-    }
-    else 
+    const user = auth(req);
+
+    if (!user || user.name !== BASIC_USER || user.pass !== BASIC_PASS)
     {
+        res.set("WWW-Authenticate", "Basic realm=\"Restricted\"");
 
-        // Lê o arquivo usuarios.txt
-        const dados = fs.readFileSync("login.txt", "utf8");
-        
-        // Divide por linhas
-        const linhas = dados.split("\n");
-        
-        // Percorre cada linha
-        for (let linha of linhas) 
+        return res.status(401).json(
         {
-            
-            // Ignora linhas vazias
-            if (linha.trim() === "") continue;
-            
-            // Separa os campos
-            const [id, usuarioArquivo, senhaArquivo, tokenArquivo] = linha.split(",");
-            
-            const tokenTxt  = tokenArquivo.trim();
-            
-            // compara token recebido com token salvo
-            if ( tokenTxt === token ) 
-            {                
-                return true;
-            }
-        }
+            status: "erro",
+            mensagem: "Credenciais BASIC inválidas"
+        });
     }
 
-    return false;
+    next();
 }
 
-
 // ===============================
-// Função que gera TOKEN simples
+// GERA TOKEN
 // ===============================
-function gerarToken() 
+function gerarToken()
 {
     return Math.random().toString(36).substring(2);
 }
 
 // ===============================
-// Função que valida LOGIN e SENHA
+// LER USUARIOS
 // ===============================
-function validarUsuario(login, senha) {
+function lerUsuarios()
+{
+    const dados = fs.readFileSync("acessos.txt", "utf8");
+    
+    return dados.split("\n");
+}
 
-    // Lê o arquivo usuarios.txt
-    const dados = fs.readFileSync("login.txt", "utf8");
+// ===============================
+// SALVAR TOKEN
+// ===============================
+function salvarToken(id, token)
+{
+    const linhas = lerUsuarios();
+    const novasLinhas = [];
 
-    // Divide por linhas
-    const linhas = dados.split("\n");
+    for (let linha of linhas)
+    {
+        if (!linha.trim()) continue;
 
-    // Percorre cada linha
-    for (let linha of linhas) {
+        let [idTxt, login, senha] = linha.split(",");
 
-        // Ignora linhas vazias
-        if (linha.trim() === "") continue;
-
-        // Separa os campos
-        const [id, usuarioArquivo, senhaArquivo, tokenArquivo] = linha.split(",");
-
-        const usuario   = usuarioArquivo.trim();
-        const senhaTxt  = senhaArquivo.trim();
-
-        // Verifica credenciais
-        if (usuario === login && senhaTxt === senha) 
+        if (idTxt === id)
         {
+            novasLinhas.push(`${idTxt},${login},${senha},${token}`);
+        }
+        else
+        {
+            novasLinhas.push(linha);
+        }
+    }
 
-            return {
-                id: id.trim(),
-                login: usuario
-            };
+    fs.writeFileSync("acessos.txt", novasLinhas.join("\n"));
+}
 
+// ===============================
+// VALIDAR TOKEN
+// ===============================
+function validarToken(token)
+{
+    const linhas = lerUsuarios();
+
+    for (let linha of linhas)
+    {
+        if (!linha.trim()) continue;
+
+        const [id, login, senha, tokenTxt] = linha.split(",");
+
+        if (tokenTxt && tokenTxt.trim() === token)
+        {
+            return { id, login };
         }
     }
 
     return null;
 }
 
-
 // ===============================
-// ROTA DE AUTENTICAÇÃO
+// VALIDAR LOGIN
 // ===============================
-app.post("/dados", (req, res) => {
+function validarLogin(login, senha)
+{
+    const linhas = lerUsuarios();
 
-    // Recebe dados enviados pelo cliente
-    const { tipoAutenticacao, dados } = req.body;
-
-    const { id, login, senha, token } = dados; 
-    
-    // 1️⃣ Verifica se token é válido
-    
-    if (tipoAutenticacao === "token")
+    for (let linha of linhas)
     {
-        const tokenValido = ValidarToken(id, token);
+        if (!linha.trim()) continue;
 
-        if (!tokenValido) 
+        const [id, user, pass] = linha.split(",");
+
+        if (user === login && pass === senha)
         {
-            console.log("Token inexistente ou inválido para usuário:", login);
-            
-            return res.json(
-            {
-                status: "TOKEN_INEXISTENTE"
-            });
-        }
-        else 
-        {
-            console.log("Login autorizado via token:");
-        
-            return res.json(
-            {
-                status: "ok - validado por token",
-                usuario: login
-            });
+            return { id, login };
         }
     }
-    else 
+
+    return null;
+}
+
+// ===============================
+// ROTA PUBLICA
+// ===============================
+app.post("/auth", basicAuthMiddleware, (req, res) =>
+{
+    const { tipo, login, senha, token } = req.body;
+
+    // tentativa via token
+    if (tipo === "token")
     {
-        // 2️⃣ Se token existe, valida login e senha
-        const usuario = validarUsuario(login, senha);    
-    
-        if (!usuario) 
+        const usuario = validarToken(token);
+
+        if (!usuario)
         {
-            console.log("Login inválido:", login);
-    
-            return res.json(
-            {
-                status: "erro",
-                mensagem: "Login ou senha inválidos"
+            return res.json({
+                status: "TOKEN_INVALIDO"
             });
         }
-    
-        const novoToken = gerarToken();
-        tokens[id]      = novoToken;
-    
-        // Salva token no arquivo TXT
-        SalvarTokenNoArquivo(id, novoToken);
-        
-        console.log("Login autorizado:", usuario);
-        
-        return res.json(
-        {
+
+        return res.json({
             status: "ok",
-            token_gerado: novoToken,
-            usuario: usuario
+            usuario
         });
     }
-    
+
+    // tentativa via login/senha
+    if (tipo === "login")
+    {
+        const usuario = validarLogin(login, senha);
+
+        if (!usuario)
+        {
+            return res.json({
+                status: "erro",
+                mensagem: "Login inválido"
+            });
+        }
+
+        const novoToken = gerarToken();
+
+        salvarToken(usuario.id, novoToken);
+
+        return res.json({
+            status: "ok",
+            token_gerado: novoToken,
+            usuario
+        });
+    }
 
 });
 
+// ===============================
+// ROTA PRIVADA PARA MENSAGEM
+// ===============================
+app.post("/mensagem", basicAuthMiddleware, (req, res) =>
+{
+    const { token, mensagem } = req.body;
 
-// Inicia o servidor
-app.listen(PORT, () => {
+    const usuario = validarToken(token);
 
+    if (!usuario)
+    {
+        return res.json({
+            status: "erro",
+            mensagem: "Token inválido"
+        });
+    }
+
+    const linha = `${usuario.login}: ${mensagem}\n`;
+
+    fs.appendFileSync("mensagens.txt", linha);
+
+    res.json({
+        status: "ok",
+        mensagem: "Mensagem gravada com sucesso"
+    });
+});
+
+// ===============================
+app.listen(PORT, () =>
+{
     console.log(`Servidor rodando em http://localhost:${PORT}`);
-
 });
